@@ -1,3 +1,4 @@
+// src/agents/auth-profiles.ts
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 export { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 export { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
@@ -43,3 +44,18 @@ export {
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
 } from "./auth-profiles/usage.js";
+
+// ===== NUEVAS EXPORTACIONES PARA COOLDOWN GLOBAL =====
+export {
+  calculateProviderCooldownMs,
+  clearExpiredProviderCooldowns,
+  clearProviderGlobalCooldown,
+  getProviderCooldownStats,
+  getSoonestProviderCooldownExpiry,
+  isProviderInGlobalCooldown,
+  markProviderGlobalCooldown,
+} from "./auth-profiles/provider-cooldown.js";
+export type { 
+  ProviderGlobalCooldown, 
+  ProviderGlobalCooldownStore 
+} from "./auth-profiles/types.js";

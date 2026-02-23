@@ -1,3 +1,5 @@
+// src/agents/model-auth.ts - Versión corregida
+
 import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -130,6 +132,8 @@ export type ResolvedProviderAuth = {
   profileId?: string;
   source: string;
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  originalProvider?: string; // Para tracking de fallback
+  fallbackProvider?: string; // Para tracking de fallback
 };
 
 export async function resolveApiKeyForProvider(params: {
@@ -139,10 +143,12 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  fallbackProviders?: string[]; // Lista de proveedores alternativos
 }): Promise<ResolvedProviderAuth> {
-  const { provider, cfg, profileId, preferredProfile } = params;
+  const { provider, cfg, profileId, preferredProfile, fallbackProviders } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
 
+  // Si se especificó un profileId específico, intentar solo con ese
   if (profileId) {
     const resolved = await resolveApiKeyForProfile({
       cfg,
@@ -167,12 +173,14 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
+  // Intentar con perfiles del proveedor principal
   const order = resolveAuthProfileOrder({
     cfg,
     store,
     provider,
     preferredProfile,
   });
+  
   for (const candidate of order) {
     try {
       const resolved = await resolveApiKeyForProfile({
@@ -193,6 +201,7 @@ export async function resolveApiKeyForProvider(params: {
     } catch {}
   }
 
+  // Intentar con variables de entorno del proveedor principal
   const envResolved = resolveEnvApiKey(provider);
   if (envResolved) {
     return {
@@ -202,16 +211,35 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
+  // Intentar con configuración personalizada del proveedor principal
   const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
 
+  // Intentar con proveedores de respaldo
+  if (fallbackProviders && fallbackProviders.length > 0) {
+    const fallbackResult = await tryResolveWithFallbackProviders({
+      originalProvider: provider,
+      cfg,
+      preferredProfile,
+      store,
+      agentDir: params.agentDir,
+      fallbackProviders,
+    });
+
+    if (fallbackResult) {
+      return fallbackResult;
+    }
+  }
+
+  // Si estamos en normalized Amazon Bedrock, intentar con AWS SDK
   const normalized = normalizeProviderId(provider);
   if (authOverride === undefined && normalized === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
   }
 
+  // Mensaje de error mejorado
   if (provider === "openai") {
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
@@ -223,9 +251,10 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
+  const fallbackHint = fallbackProviders ? `\nTried fallbacks: ${fallbackProviders.join(', ')}` : '';
   throw new Error(
     [
-      `No API key found for provider "${provider}".`,
+      `No API key found for provider "${provider}".${fallbackHint}`,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
     ].join(" "),
@@ -393,6 +422,7 @@ export async function getApiKeyForModel(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  fallbackProviders?: string[];
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -401,7 +431,94 @@ export async function getApiKeyForModel(params: {
     preferredProfile: params.preferredProfile,
     store: params.store,
     agentDir: params.agentDir,
+    fallbackProviders: params.fallbackProviders,
   });
+}
+
+// Función auxiliar para fallback entre proveedores
+async function tryResolveWithFallbackProviders(params: {
+  originalProvider: string;
+  cfg?: OpenClawConfig;
+  preferredProfile?: string;
+  store?: AuthProfileStore;
+  agentDir?: string;
+  fallbackProviders?: string[];
+}): Promise<ResolvedProviderAuth | null> {
+  const { originalProvider, cfg, preferredProfile, store, agentDir, fallbackProviders } = params;
+  
+  if (!fallbackProviders || fallbackProviders.length === 0) {
+    return null;
+  }
+
+  console.debug(`Primary provider "${originalProvider}" failed, trying fallbacks: ${fallbackProviders.join(', ')}`);
+
+  for (const fallbackProvider of fallbackProviders) {
+    try {
+      const fallbackStore = store ?? ensureAuthProfileStore(agentDir);
+      const profiles = listProfilesForProvider(fallbackStore, fallbackProvider);
+      
+      if (profiles.length > 0) {
+        const order = resolveAuthProfileOrder({
+          cfg,
+          store: fallbackStore,
+          provider: fallbackProvider,
+          preferredProfile,
+        });
+
+        for (const candidate of order) {
+          try {
+            const resolved = await resolveApiKeyForProfile({
+              cfg,
+              store: fallbackStore,
+              profileId: candidate,
+              agentDir,
+            });
+            
+            if (resolved) {
+              const mode = fallbackStore.profiles[candidate]?.type;
+              console.debug(`Successfully failed over to ${fallbackProvider} using profile ${candidate}`);
+              return {
+                apiKey: resolved.apiKey,
+                profileId: candidate,
+                source: `fallback:${fallbackProvider}:${candidate}`,
+                mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
+                originalProvider,
+                fallbackProvider,
+              };
+            }
+          } catch {}
+        }
+      }
+
+      const envResolved = resolveEnvApiKey(fallbackProvider);
+      if (envResolved) {
+        console.debug(`Successfully failed over to ${fallbackProvider} using env`);
+        return {
+          apiKey: envResolved.apiKey,
+          source: `fallback:${fallbackProvider}:${envResolved.source}`,
+          mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+          originalProvider,
+          fallbackProvider,
+        };
+      }
+
+      const customKey = getCustomProviderApiKey(cfg, fallbackProvider);
+      if (customKey) {
+        console.debug(`Successfully failed over to ${fallbackProvider} using custom config`);
+        return {
+          apiKey: customKey,
+          source: `fallback:${fallbackProvider}:models.json`,
+          mode: "api-key",
+          originalProvider,
+          fallbackProvider,
+        };
+      }
+    } catch (error) {
+      console.debug(`Fallback provider ${fallbackProvider} failed:`, error);
+    }
+  }
+
+  return null;
 }
 
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {

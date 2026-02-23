@@ -73,3 +73,28 @@ export type AuthProfileIdRepairResult = {
   fromProfileId?: string;
   toProfileId?: string;
 };
+
+// AÑADIR al final de types.ts
+
+/**
+ * Cooldown global a nivel de proveedor (no por perfil)
+ */
+export type ProviderGlobalCooldown = {
+  /** Proveedor en cooldown */
+  provider: string;
+  /** Timestamp hasta cuando está en cooldown */
+  until: number;
+  /** Razón del cooldown */
+  reason: AuthProfileFailureReason;
+  /** Número de intentos fallidos */
+  attemptCount: number;
+  /** Último error registrado */
+  lastError?: string;
+  /** Perfiles específicos que causaron el cooldown (opcional) */
+  affectedProfiles?: string[];
+};
+
+export type ProviderGlobalCooldownStore = {
+  version: number;
+  cooldowns: Record<string, ProviderGlobalCooldown>;
+};

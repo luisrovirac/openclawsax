@@ -9,6 +9,9 @@ import {
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
+  isProviderInGlobalCooldown,
+  markProviderGlobalCooldown,
+  clearExpiredProviderCooldowns,
 } from "./auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -170,6 +173,9 @@ function resolveImageFallbackCandidates(params: {
   return candidates;
 }
 
+/**
+ * Resuelve candidatos de fallback multi-proveedor
+ */
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -190,6 +196,46 @@ function resolveFallbackCandidates(params: {
   const modelRaw = String(params.model ?? "").trim() || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
+  
+  // NUEVO: Si hay fallbacksOverride en formato "provider/model", procesarlos como multi-proveedor
+  if (params.fallbacksOverride && params.fallbacksOverride.length > 0) {
+    const multiProviderCandidates: ModelCandidate[] = [];
+    const seen = new Set<string>();
+    
+    // Añadir primary
+    const primaryKey = modelKey(normalizedPrimary.provider, normalizedPrimary.model);
+    seen.add(primaryKey);
+    multiProviderCandidates.push({
+      provider: normalizedPrimary.provider,
+      model: normalizedPrimary.model,
+    });
+    
+    // Procesar cada fallback (pueden ser "provider/model" o solo "model")
+    for (const raw of params.fallbacksOverride) {
+      const resolved = resolveModelRefFromString({
+        raw: String(raw ?? ""),
+        defaultProvider,
+        aliasIndex: buildModelAliasIndex({
+          cfg: params.cfg ?? {},
+          defaultProvider,
+        }),
+      });
+      if (!resolved) continue;
+      
+      const key = modelKey(resolved.ref.provider, resolved.ref.model);
+      if (!seen.has(key)) {
+        seen.add(key);
+        multiProviderCandidates.push({
+          provider: resolved.ref.provider,
+          model: resolved.ref.model,
+        });
+      }
+    }
+    
+    return multiProviderCandidates;
+  }
+  
+  // Código existente para el caso sin fallbacksOverride (mismo proveedor)
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
@@ -287,12 +333,17 @@ export async function runWithModelFallback<T>(params: {
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
+  console.log(`🚀 Iniciando runWithModelFallback con provider=${params.provider}, model=${params.model}`);
+  
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
   });
+  
+  console.log(`📋 Candidatos:`, candidates.map(c => `${c.provider}/${c.model}`));
+  
   const authStore = params.cfg
     ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;
@@ -301,8 +352,30 @@ export async function runWithModelFallback<T>(params: {
 
   const hasFallbackCandidates = candidates.length > 1;
 
+  // Limpiar cooldowns globales expirados antes de empezar
+  if (params.agentDir) {
+    await clearExpiredProviderCooldowns(params.agentDir);
+  }
+
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    console.log(`🔄 Intento ${i + 1}/${candidates.length}: ${candidate.provider}/${candidate.model}`);
+    
+    // Verificar cooldown global del proveedor
+    if (params.agentDir) {
+      const providerCooldown = await isProviderInGlobalCooldown(candidate.provider, params.agentDir);
+      if (providerCooldown.inCooldown) {
+        console.log(`⏳ Provider ${candidate.provider} en cooldown global, saltando`);
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: `Provider in global cooldown (${providerCooldown.cooldown?.reason})`,
+          reason: providerCooldown.cooldown?.reason,
+        });
+        continue;
+      }
+    }
+    
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -312,10 +385,7 @@ export async function runWithModelFallback<T>(params: {
       const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown.
-        // For the primary model (i === 0), probe it if the soonest cooldown
-        // expiry is close or already past. This avoids staying on a fallback
-        // model long after the real rate-limit window clears.
+        console.log(`⏳ Provider ${candidate.provider} todos los perfiles en cooldown, saltando`);
         const now = Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
         const shouldProbe = shouldProbePrimaryDuringCooldown({
@@ -333,7 +403,6 @@ export async function runWithModelFallback<T>(params: {
               profileIds,
               now,
             }) ?? "rate_limit";
-          // Skip without attempting
           attempts.push({
             provider: candidate.provider,
             model: candidate.model,
@@ -342,14 +411,14 @@ export async function runWithModelFallback<T>(params: {
           });
           continue;
         }
-        // Primary model probe: attempt it despite cooldown to detect recovery.
-        // If it fails, the error is caught below and we fall through to the
-        // next candidate as usual.
         lastProbeAttempt.set(probeThrottleKey, now);
       }
     }
+    
     try {
+      console.log(`⚡ Ejecutando run para ${candidate.provider}/${candidate.model}`);
       const result = await params.run(candidate.provider, candidate.model);
+      console.log(`✅ Éxito con ${candidate.provider}/${candidate.model}`);
       return {
         result,
         provider: candidate.provider,
@@ -357,28 +426,50 @@ export async function runWithModelFallback<T>(params: {
         attempts,
       };
     } catch (err) {
+      console.log(`❌ Error en ${candidate.provider}/${candidate.model}:`, err);
+      
       if (shouldRethrowAbort(err)) {
+        console.log(`🚫 Error de abort, relanzando`);
         throw err;
       }
-      // Context overflow errors should be handled by the inner runner's
-      // compaction/retry logic, not by model fallback.  If one escapes as a
-      // throw, rethrow it immediately rather than trying a different model
-      // that may have a smaller context window and fail worse.
+      
       const errMessage = err instanceof Error ? err.message : String(err);
       if (isLikelyContextOverflowError(errMessage)) {
+        console.log(`📏 Error de context overflow, relanzando`);
         throw err;
       }
+      
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
           model: candidate.model,
         }) ?? err;
+      
       if (!isFailoverError(normalized)) {
+        console.log(`⚠️ Error no es FailoverError, relanzando:`, normalized);
         throw err;
       }
 
       lastError = normalized;
       const described = describeFailoverError(normalized);
+      console.log(`📝 Error descrito:`, described);
+      
+      // Marcar cooldown global del proveedor según el tipo de error
+      if (described.reason && params.agentDir) {
+        console.log(`🔥 Marcando cooldown global para ${candidate.provider} por ${described.reason}`);
+        await markProviderGlobalCooldown({
+          provider: candidate.provider,
+          reason: described.reason,
+          agentDir: params.agentDir,
+          affectedProfiles: authStore ? 
+            resolveAuthProfileOrder({
+              cfg: params.cfg,
+              store: authStore,
+              provider: candidate.provider,
+            }) : undefined,
+        });
+      }
+      
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
@@ -387,6 +478,9 @@ export async function runWithModelFallback<T>(params: {
         status: described.status,
         code: described.code,
       });
+      
+      console.log(`📊 Intentos hasta ahora:`, attempts);
+      
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,
@@ -397,6 +491,7 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
+  console.log(`❌ Todos los intentos fallaron, lanzando error resumido`);
   throwFallbackFailureSummary({
     attempts,
     candidates,

@@ -8,6 +8,11 @@ import { normalizeGoogleModelId } from "./models-config.providers.js";
 
 const log = createSubsystemLogger("model-selection");
 
+type ModelCandidate = {
+  provider: string;
+  model: string;
+};
+
 export type ModelRef = {
   provider: string;
   model: string;
@@ -112,12 +117,10 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "google") {
     return normalizeGoogleModelId(model);
   }
-  // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
-  // "openrouter/<name>" as the model ID sent to the API. Models from external
-  // providers already contain a slash (e.g. "anthropic/claude-sonnet-4-5") and
-  // are passed through as-is (#12924).
-  if (provider === "openrouter" && !model.includes("/")) {
-    return `openrouter/${model}`;
+  // Para OpenRouter, NO debemos añadir el prefijo "openrouter/" porque ya viene del provider
+  // El modelo debe pasarse tal cual
+  if (provider === "openrouter") {
+    return model; // Devolver el modelo sin modificar
   }
   return model;
 }
@@ -136,8 +139,19 @@ function shouldUseOpenAICodexProvider(provider: string, model: string): boolean 
 }
 
 export function normalizeModelRef(provider: string, model: string): ModelRef {
+  console.debug(`normalizeModelRef input: provider=${provider}, model=${model}`);
   const normalizedProvider = normalizeProviderId(provider);
+  
+  // Si el modelo ya tiene un slash, es un modelo compuesto (ej: "anthropic/claude-sonnet")
+  // y debe preservarse tal cual
+  if (model.includes("/")) {
+    console.debug(`normalizeModelRef: model already has slash, preserving as-is`);
+    return { provider: normalizedProvider, model };
+  }
+  
   const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
+  console.debug(`normalizeModelRef output: provider=${normalizedProvider}, model=${normalizedModel}`);
+  
   if (shouldUseOpenAICodexProvider(normalizedProvider, normalizedModel)) {
     return { provider: "openai-codex", model: normalizedModel };
   }
@@ -145,16 +159,20 @@ export function normalizeModelRef(provider: string, model: string): ModelRef {
 }
 
 export function parseModelRef(raw: string, defaultProvider: string): ModelRef | null {
+  console.debug(`parseModelRef input: raw=${raw}, defaultProvider=${defaultProvider}`);	
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    return normalizeModelRef(defaultProvider, trimmed);
+    const result = normalizeModelRef(defaultProvider, trimmed);
+    console.debug(`parseModelRef output (no slash):`, result);
+    return result;
   }
   const providerRaw = trimmed.slice(0, slash).trim();
   const model = trimmed.slice(slash + 1).trim();
+  console.debug(`parseModelRef split: providerRaw=${providerRaw}, model=${model}`);
   if (!providerRaw || !model) {
     return null;
   }
@@ -245,10 +263,12 @@ export function resolveModelRefFromString(params: {
     const aliasKey = normalizeAliasKey(trimmed);
     const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
     if (aliasMatch) {
+	  console.debug(`resolveModelRefFromString found alias:`, aliasMatch);
       return { ref: aliasMatch.ref, alias: aliasMatch.alias };
     }
   }
   const parsed = parseModelRef(trimmed, params.defaultProvider);
+  console.debug(`resolveModelRefFromString parsed:`, parsed);
   if (!parsed) {
     return null;
   }
@@ -535,6 +555,80 @@ export function resolveReasoningDefault(params: {
       (entry.provider === key && entry.id === params.model),
   );
   return candidate?.reasoning === true ? "on" : "off";
+}
+
+// AÑADIR al final de model-selection.ts
+
+export type MultiProviderFallbackConfig = {
+  /** Proveedor principal */
+  primaryProvider: string;
+  /** Modelo principal */
+  primaryModel: string;
+  /** Lista de proveedores alternativos con sus modelos */
+  fallbackProviders?: Array<{
+    provider: string;
+    model?: string; // Si no se especifica, se usa el mismo nombre de modelo
+    priority?: number;
+  }>;
+  /** ¿Usar fallbacks globales de la configuración? */
+  useGlobalFallbacks?: boolean;
+};
+
+/**
+ * Resuelve candidatos de fallback multi-proveedor
+ */
+export function resolveMultiProviderFallbackCandidates(
+  params: MultiProviderFallbackConfig & {
+    cfg: OpenClawConfig | undefined;
+    defaultProvider: string;
+  }
+): ModelCandidate[] {
+  const candidates: ModelCandidate[] = [];
+  const seen = new Set<string>();
+  
+  // 1. Añadir proveedor principal
+  const primaryKey = modelKey(params.primaryProvider, params.primaryModel);
+  seen.add(primaryKey);
+  candidates.push({
+    provider: params.primaryProvider,
+    model: params.primaryModel,
+  });
+  
+  // 2. Añadir fallbacks específicos
+  if (params.fallbackProviders) {
+    // Ordenar por prioridad (menor número = mayor prioridad)
+    const sorted = [...params.fallbackProviders].sort((a, b) => 
+      (a.priority ?? 999) - (b.priority ?? 999)
+    );
+    
+    for (const fb of sorted) {
+      const provider = fb.provider;
+      const model = fb.model ?? params.primaryModel;
+      const key = modelKey(provider, model);
+      
+      if (!seen.has(key)) {
+        seen.add(key);
+        candidates.push({ provider, model });
+      }
+    }
+  }
+  
+  // 3. Si se permite, añadir fallbacks globales de la configuración
+  if (params.useGlobalFallbacks && params.cfg?.agents?.defaults?.globalFallbackProviders) {
+    const globalFallbacks = params.cfg.agents.defaults.globalFallbackProviders;
+    for (const fb of globalFallbacks) {
+      const provider = typeof fb === 'string' ? fb : fb.provider;
+      const model = typeof fb === 'string' ? params.primaryModel : (fb.model ?? params.primaryModel);
+      const key = modelKey(provider, model);
+      
+      if (!seen.has(key)) {
+        seen.add(key);
+        candidates.push({ provider, model });
+      }
+    }
+  }
+  
+  return candidates;
 }
 
 /**
