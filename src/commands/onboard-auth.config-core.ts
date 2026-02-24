@@ -1,3 +1,4 @@
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
@@ -37,6 +38,7 @@ import {
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
+  GROQ_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   applyCloudflareAiGatewayConfig,
@@ -513,4 +515,63 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Groq provider configuration without changing the default model.
+ * Registers Groq models and sets up the provider, but preserves existing model selection.
+ */
+export function applyGroqProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[GROQ_DEFAULT_MODEL_REF] = {
+    ...models[GROQ_DEFAULT_MODEL_REF],
+    alias: models[GROQ_DEFAULT_MODEL_REF]?.alias ?? "Llama 3",
+  };
+
+  const groqModels: ModelDefinitionConfig[]  = [
+    {
+      id: "llama3-70b-8192",
+      name: "Llama 3 70B",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 4096,
+    },
+    {
+      id: "llama3-8b-8192",
+      name: "Llama 3 8B",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 4096,
+    },
+    {
+      id: "mixtral-8x7b-32768",
+      name: "Mixtral 8x7B",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    },
+  ];
+
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "groq",
+    api: "openai-completions",
+    baseUrl: "https://api.groq.com/openai/v1",
+    catalogModels: groqModels,
+  });
+}
+
+/**
+ * Apply Groq provider configuration AND set Groq as the default model.
+ * Use this when Groq is the primary provider choice during onboarding.
+ */
+export function applyGroqConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyGroqProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, GROQ_DEFAULT_MODEL_REF);
 }

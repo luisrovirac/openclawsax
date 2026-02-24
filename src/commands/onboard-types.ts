@@ -49,10 +49,12 @@ export type AuthChoice =
   | "byteplus-api-key"
   | "qianfan-api-key"
   | "custom-api-key"
+  | "groq"
   | "skip";
 export type AuthChoiceGroupId =
   | "openai"
   | "anthropic"
+  | "groq"
   | "chutes"
   | "vllm"
   | "google"

@@ -44,6 +44,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     description: "Anthropic API key",
   },
   {
+    optionKey: "groqApiKey",
+    authChoice: "groq-api-key",
+    cliFlag: "--groq-api-key",
+    cliOption: "--groq-api-key <key>",
+    description: "Groq API key",
+  },  
+  {
     optionKey: "openaiApiKey",
     authChoice: "openai-api-key",
     cliFlag: "--openai-api-key",

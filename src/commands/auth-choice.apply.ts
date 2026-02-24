@@ -1,3 +1,4 @@
+import { applyAuthChoiceGroq } from "./auth-choice.apply.groq"; // add
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -40,6 +41,7 @@ export async function applyAuthChoice(
     applyAuthChoiceVllm,
     applyAuthChoiceOpenAI,
     applyAuthChoiceOAuth,
+	applyAuthChoiceGroq, // add
     applyAuthChoiceApiProviders,
     applyAuthChoiceMiniMax,
     applyAuthChoiceGitHubCopilot,

@@ -246,3 +246,40 @@ export async function getProviderCooldownStats(agentDir?: string): Promise<{
     soonestExpiry: soonestWithRemaining,
   };
 }
+
+export async function getSoonestProviderExpiry(
+  agentDir?: string
+): Promise<{ provider: string; until: number } | null> {
+  const store = loadProviderCooldownStore(agentDir);
+  const now = Date.now();
+  let soonest: { provider: string; until: number } | null = null;
+  
+  for (const [provider, cooldown] of Object.entries(store.cooldowns)) {
+    if (cooldown.until > now) {
+      if (!soonest || cooldown.until < soonest.until) {
+        soonest = { provider, until: cooldown.until };
+      }
+    }
+  }
+  
+  return soonest;
+}
+
+
+export async function getSoonestProviderCooldownExpiry(
+  agentDir?: string
+): Promise<{ provider: string; until: number } | null> {
+  const store = loadProviderCooldownStore(agentDir);
+  const now = Date.now();
+  let soonest: { provider: string; until: number } | null = null;
+  
+  for (const [provider, cooldown] of Object.entries(store.cooldowns)) {
+    if (cooldown.until > now) {
+      if (!soonest || cooldown.until < soonest.until) {
+        soonest = { provider, until: cooldown.until };
+      }
+    }
+  }
+  
+  return soonest;
+}

@@ -5,6 +5,7 @@ import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-s
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
+//import { AgentDefaultsConfig } from "../config/types.agent-defaults.ts";
 
 const log = createSubsystemLogger("model-selection");
 

@@ -371,4 +371,18 @@ export async function setMistralApiKey(key: string, agentDir?: string) {
     },
     agentDir: resolveAuthAgentDir(agentDir),
   });
+ }
+
+ export const GROQ_DEFAULT_MODEL_REF = "groq/llama3-70b-8192";
+
+export async function setGroqApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "groq:default",
+    credential: {
+      type: "api_key",
+      provider: "groq",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
 }

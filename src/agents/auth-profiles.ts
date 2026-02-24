@@ -51,6 +51,7 @@ export {
   clearExpiredProviderCooldowns,
   clearProviderGlobalCooldown,
   getProviderCooldownStats,
+  getSoonestProviderExpiry,
   getSoonestProviderCooldownExpiry,
   isProviderInGlobalCooldown,
   markProviderGlobalCooldown,
