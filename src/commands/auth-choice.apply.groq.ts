@@ -7,7 +7,7 @@ import {
   GROQ_DEFAULT_MODEL_REF,
   applyGroqConfig,
   applyGroqProviderConfig,
-} from "./onboard-auth.js";  // ← TODO viene de onboard-auth
+} from "./onboard-auth.js";
 import {
   normalizeApiKeyInput,
   validateApiKeyInput,
@@ -25,10 +25,6 @@ export async function applyAuthChoiceGroq(
 
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
-  
-  const noteAgentModel = async (model: string) => {
-    await params.prompter.note(`Default model set to ${model}`, "Model configured");
-  };
   
   const stateBridge = createAuthChoiceModelStateBridge({
     getConfig: () => nextConfig,
@@ -78,7 +74,7 @@ export async function applyAuthChoiceGroq(
     mode: "api_key",
   });
 
-  // Aplicar modelo por defecto
+  // Aplicar modelo por defecto - AHORA USA LAS FUNCIONES IMPORTADAS
   await applyProviderDefaultModel({
     defaultModel: GROQ_DEFAULT_MODEL_REF,
     applyDefaultConfig: applyGroqConfig,
@@ -87,68 +83,4 @@ export async function applyAuthChoiceGroq(
   });
 
   return { config: nextConfig, agentModelOverride };
-}
-
-// Funciones auxiliares para configurar Groq
-function applyGroqConfig(config: any): any {
-  return {
-    ...config,
-    models: {
-      ...config.models,
-      providers: {
-        ...config.models?.providers,
-        groq: {
-          baseUrl: "https://api.groq.com/openai/v1",
-          api: "openai-completions",
-          models: [
-            {
-              id: "llama3-70b-8192",
-              name: "Llama 3 70B",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 8192,
-              maxTokens: 4096,
-            },
-            {
-              id: "llama3-8b-8192",
-              name: "Llama 3 8B",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 8192,
-              maxTokens: 4096,
-            },
-            {
-              id: "mixtral-8x7b-32768",
-              name: "Mixtral 8x7B",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 32768,
-              maxTokens: 8192,
-            },
-          ],
-        },
-      },
-    },
-  };
-}
-
-function applyGroqProviderConfig(config: any): any {
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        models: {
-          ...config.agents?.defaults?.models,
-          "groq/llama3-70b-8192": { alias: "llama" },
-          "groq/llama3-8b-8192": {},
-          "groq/mixtral-8x7b-32768": { alias: "mixtral" },
-        },
-      },
-    },
-  };
 }

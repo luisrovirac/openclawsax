@@ -50,11 +50,13 @@ export type AuthChoice =
   | "qianfan-api-key"
   | "custom-api-key"
   | "groq"
+  | "groq-api-key"  // <-- AÑADIDO
   | "skip";
+  
 export type AuthChoiceGroupId =
   | "openai"
   | "anthropic"
-  | "groq"
+  | "groq"  // <-- ESTO YA EXISTE
   | "chutes"
   | "vllm"
   | "google"
@@ -79,6 +81,7 @@ export type AuthChoiceGroupId =
   | "volcengine"
   | "byteplus"
   | "custom";
+  
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -130,6 +133,7 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  groqApiKey?: string;  // <-- AÑADIDO
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;
